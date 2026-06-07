@@ -1,0 +1,26 @@
+# CMake build directories
+/build/
+/CMakeFiles/
+/CMakeSettings.json
+/CMakeCache.txt
+/cmake_install.cmake
+/Makefile
+
+# Target executables
+/*.exe
+/*.out
+/*.app
+
+# IDE configuration
+/.vs/
+/.vscode/
+/out/
+
+# Local dependency/static build leftovers
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
