@@ -61,6 +61,14 @@ else()
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
         $<$<CONFIG:Debug>:-g>
     )
+    # Statically embed MinGW runtime so the .exe has no libstdc++/libgcc/libwinpthread DLL deps
+    if(WIN32)
+        target_link_options(OpenGLProject PRIVATE
+            -static-libgcc
+            -static-libstdc++
+            -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive
+        )
+    endif()
 endif()
 
 # ── Windows: set console subsystem ────────────────────────────
