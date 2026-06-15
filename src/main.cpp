@@ -19,6 +19,9 @@
 
 // ─── Window ───────────────────────────────────────────────────
 static int SCR_W = 1280, SCR_H = 720;
+static bool gFullscreen  = false;
+static int  gWinX=100,gWinY=100,gWinW=1280,gWinH=720; // saved windowed pos/size
+static GLFWwindow* gWin  = nullptr;
 
 // ─── Road constants ───────────────────────────────────────────
 static const float ROAD_HALF   = 7.0f;      // road half-width in world X
@@ -37,6 +40,14 @@ static float playerX      = 0.f;
 static float playerTargetX= 0.f;
 static float baseSpeed    = 10.f;
 static float distance     = 0.f;
+
+// Zoom
+static float camZoom      = 1.0f;   // 1.0 = normal, <1 = zoomed in, >1 = zoomed out
+static float camZoomTarget= 1.0f;
+
+// Manual speed control
+static bool  accelOn      = false;  // W / UP  — accelerate forward
+static bool  brakeOn      = false;  // S / DOWN — brake / slow down
 static int   score        = 0;
 static int   coinCount    = 0;
 static int   lives        = 3;
@@ -124,6 +135,7 @@ static void resetGame(){
     playerX=0.f; playerTargetX=0.f;
     baseSpeed=10.f; distance=0.f; score=0; coinCount=0; lives=3;
     nitroFuel=1.f; nitroOn=false; slowOn=false; slowTimer=0.f;
+    camZoom=1.0f; camZoomTarget=1.0f; accelOn=false; brakeOn=false;
     invincible=false; invTimer=0.f; shakeAmt=0.f;
     fogDensity=0.f; wetness=0.f; deathTimer=0.f;
     for(int i=0;i<10;i++) spawnTraffic();
@@ -688,7 +700,7 @@ static void hudRect(float x,float y,float w,float h,
 //  Pixel Font  –  5×7 bitmap, supports 0-9 and A-Z
 //  Each char = 35 bits packed into a uint64_t, row-major top→bot
 // ─────────────────────────────────────────────────────────────
-static const uint64_t PFONT[36] = {
+static const uint64_t PFONT[40] = {
 //  0
 0b00000'01110'10001'10011'10101'11001'10001'01110ULL,
 //  1
@@ -761,6 +773,14 @@ static const uint64_t PFONT[36] = {
 0b00000'10001'10001'01010'00100'00100'00100'00100ULL,
 //  Z
 0b00000'11111'00001'00010'00100'01000'10000'11111ULL,
+//  ^ (Up Arrow)
+0b00000'00100'01110'10101'00100'00100'00100'00100ULL,
+//  _ (Down Arrow)
+0b00000'00100'00100'00100'00100'10101'01110'00100ULL,
+//  < (Left Arrow)
+0b00000'00000'00100'01000'11111'01000'00100'00000ULL,
+//  > (Right Arrow)
+0b00000'00000'00100'00010'11111'00010'00100'00000ULL,
 };
 
 // Draw a single character at normalised screen pos (x,y)
@@ -772,6 +792,10 @@ static void pfontChar(char c, float x, float y, float cw, float ch,
     if(c>='0'&&c<='9') idx=c-'0';
     else if(c>='A'&&c<='Z') idx=10+(c-'A');
     else if(c>='a'&&c<='z') idx=10+(c-'a');
+    else if(c=='^') idx=36;
+    else if(c=='_') idx=37;
+    else if(c=='<') idx=38;
+    else if(c=='>') idx=39;
     if(idx<0) return;
 
     uint64_t bits = PFONT[idx];
@@ -853,17 +877,33 @@ static void drawSpeedometer(float spd, float maxSpd)
 
     pfontStr("KMH", bx+0.032f,by+0.158f, 0.013f,0.020f, 0.5f,0.7f,0.9f);
 
+    // Active mode indicator
     if(nitroOn){
         float g=0.5f+sinf(gTime*15.f)*0.5f;
-        hudRect(bx+0.008f,by+0.188f,bw-0.016f,0.042f, 1.f,0.4f+g*0.3f,0.f,0.8f);
-        pfontStr("NITRO", bx+0.015f,by+0.198f, 0.012f,0.020f, 1.f,1.f,0.5f);
-    }
-    if(slowOn){
+        hudRect(bx+0.008f,by+0.186f,bw-0.016f,0.040f, 1.f,0.4f+g*0.3f,0.f,0.85f);
+        pfontStr("NITRO", bx+0.015f,by+0.196f, 0.012f,0.020f, 1.f,1.f,0.5f);
+    } else if(accelOn){
+        float g=0.4f+sinf(gTime*12.f)*0.4f;
+        hudRect(bx+0.008f,by+0.186f,bw-0.016f,0.040f, 0.1f,0.7f+g*0.2f,0.1f,0.85f);
+        pfontStr("ACCEL", bx+0.012f,by+0.196f, 0.012f,0.020f, 0.5f,1.f,0.5f);
+    } else if(brakeOn){
         float g=0.4f+sinf(gTime*10.f)*0.4f;
-        hudRect(bx+0.008f,by+0.188f,bw-0.016f,0.042f, 0.f,g*0.5f,1.f,0.7f);
-        pfontStr("SLOW", bx+0.020f,by+0.198f, 0.012f,0.020f, 0.8f,1.f,1.f);
+        hudRect(bx+0.008f,by+0.186f,bw-0.016f,0.040f, 0.8f+g*0.2f,0.1f,0.1f,0.85f);
+        pfontStr("BRAKE", bx+0.012f,by+0.196f, 0.012f,0.020f, 1.f,0.4f,0.4f);
+    } else if(slowOn){
+        float g=0.4f+sinf(gTime*10.f)*0.4f;
+        hudRect(bx+0.008f,by+0.186f,bw-0.016f,0.040f, 0.f,g*0.5f,1.f,0.75f);
+        pfontStr("SLOW", bx+0.020f,by+0.196f, 0.012f,0.020f, 0.8f,1.f,1.f);
     }
+
+    // Zoom level bar (bottom of panel)
+    float zfrac = (camZoom - 0.40f) / (2.20f - 0.40f); // 0=max zoom-in, 1=max zoom-out
+    hudRect(bx+0.008f,by+bh-0.030f, bw-0.016f,0.018f, 0.05f,0.05f,0.08f,0.7f);
+    hudRect(bx+0.008f,by+bh-0.030f, (bw-0.016f)*zfrac,0.018f, 0.f,0.8f,1.f,0.85f);
+    // Zoom label
+    pfontStr("Z", bx+0.008f,by+bh-0.048f, 0.008f,0.014f, 0.f,0.7f,1.f);
 }
+
 
 // Nitro fuel bar  (bottom-right)
 static void drawNitroBar()
@@ -999,7 +1039,7 @@ static void drawMenu()
     }
 
     // ── TITLE BANNER ─────────────────────────────────────────
-    float bx=0.12f, by=0.15f, bw=0.76f, bh=0.260f;
+    float bx=0.12f, by=0.120f, bw=0.76f, bh=0.230f;
     // Glow border
     hudRect(bx-0.005f,by-0.005f,bw+0.010f,bh+0.010f, 0.f,0.4f+pulse*0.3f,1.f,pulse*0.35f);
     // Banner bg
@@ -1018,10 +1058,10 @@ static void drawMenu()
     // "RACER" — slightly smaller, different colour
     float cw2=0.032f, ch2=0.078f;
     float tw2=pfontWidth(5,cw2);
-    pfontStr("RACER", bx+(bw-tw2)*0.5f, by+0.155f, cw2,ch2, 1.f,0.72f+pulse*0.2f,0.1f);
+    pfontStr("RACER", bx+(bw-tw2)*0.5f, by+0.130f, cw2,ch2, 1.f,0.72f+pulse*0.2f,0.1f);
 
     // ── BEST SCORE PANEL ─────────────────────────────────────
-    float spx=0.30f, spy=0.455f, spw=0.40f, sph=0.090f;
+    float spx=0.30f, spy=0.380f, spw=0.40f, sph=0.090f;
     hudRect(spx,spy,spw,sph, 0.f,0.f,0.f,0.55f);
     hudRect(spx,spy,spw,0.003f, 0.f,0.6f,1.f,0.7f);
     hudRect(spx,spy+sph-0.003f,spw,0.003f, 0.f,0.6f,1.f,0.7f);
@@ -1033,18 +1073,47 @@ static void drawMenu()
     pfontInt(0,      spx+spw*0.52f,spy+0.038f, 0.016f,0.040f, 1.f,0.75f,0.f);
 
     // ── CONTROLS PANEL ───────────────────────────────────────
-    float cpx=0.28f, cpy=0.570f, cpw=0.44f, cph=0.110f;
-    hudRect(cpx,cpy,cpw,cph, 0.f,0.f,0.f,0.50f);
+    float cpx=0.22f, cpy=0.475f, cpw=0.56f, cph=0.225f;
+    hudRect(cpx,cpy,cpw,cph, 0.f,0.f,0.f,0.55f);
     hudRect(cpx,cpy,cpw,0.003f, 0.f,0.5f,0.8f,0.6f);
-    // Control labels
-    pfontStr("A D    STEER",  cpx+0.012f,cpy+0.012f, 0.010f,0.018f, 0.6f,0.9f,1.f);
-    pfontStr("SHIFT  NITRO", cpx+0.012f,cpy+0.038f, 0.010f,0.016f, 1.f,0.7f,0.2f);
-    pfontStr("CTRL S SLOW",  cpx+0.012f,cpy+0.062f, 0.010f,0.016f, 0.4f,0.9f,0.9f);
-    pfontStr("SPACE  START", cpx+0.012f,cpy+0.084f, 0.010f,0.016f, 0.7f,0.7f,1.f);
+    hudRect(cpx,cpy+cph-0.003f,cpw,0.003f, 0.f,0.5f,0.8f,0.3f);
+
+    float lh=0.021f; // line height step
+    float cx2=cpx+0.012f, cy2=cpy+0.008f, cs=0.009f, ch_ctrl=0.015f;
+    // Row 1 — Accelerate (W OR Up Arrow)
+    pfontStr("W OR ^",      cx2,cy2,       cs,ch_ctrl, 0.3f,1.f,0.4f);
+    pfontStr("ACCEL FORWARD",cx2+0.210f,cy2,cs,ch_ctrl, 0.2f,0.7f,0.3f);
+    // Row 2 — Brake (S OR Down Arrow)
+    pfontStr("S OR _",      cx2,cy2+lh,    cs,ch_ctrl, 1.f,0.4f,0.3f);
+    pfontStr("BRAKE REVERSE",cx2+0.210f,cy2+lh, cs,ch_ctrl, 0.8f,0.3f,0.2f);
+    // Row 3 — A/Left Arrow → steer right
+    pfontStr("A OR <",      cx2,cy2+lh*2,  cs,ch_ctrl, 0.5f,0.9f,1.f);
+    pfontStr("STEER RIGHT",  cx2+0.210f,cy2+lh*2, cs,ch_ctrl, 0.3f,0.6f,0.8f);
+    // Row 4 — D/Right Arrow → steer left
+    pfontStr("D OR >",      cx2,cy2+lh*3,  cs,ch_ctrl, 0.5f,0.9f,1.f);
+    pfontStr("STEER LEFT",   cx2+0.210f,cy2+lh*3, cs,ch_ctrl, 0.3f,0.6f,0.8f);
+    // Row 5 — nitro
+    pfontStr("SHIFT OR N",  cx2,cy2+lh*4,  cs,ch_ctrl, 1.f,0.75f,0.2f);
+    pfontStr("NITRO BOOST", cx2+0.210f,cy2+lh*4, cs,ch_ctrl, 0.8f,0.6f,0.1f);
+    // Row 6 — slow-mo
+    pfontStr("CTRL OR Z",   cx2,cy2+lh*5,  cs,ch_ctrl, 0.4f,0.9f,1.f);
+    pfontStr("SLOW MOTION", cx2+0.210f,cy2+lh*5, cs,ch_ctrl, 0.3f,0.7f,0.9f);
+    // Row 7 — zoom keys
+    pfontStr("Q E OR EQ MINUS", cx2,cy2+lh*6,  cs,ch_ctrl, 0.7f,0.5f,1.f);
+    pfontStr("STEP ZOOM",   cx2+0.210f,cy2+lh*6, cs,ch_ctrl, 0.5f,0.4f,0.9f);
+    // Row 8 — zoom continuous / scroll
+    pfontStr("SCROLL PGUP DN", cx2,cy2+lh*7,  cs,ch_ctrl, 0.7f,0.5f,1.f);
+    pfontStr("SMOOTH ZOOM", cx2+0.210f,cy2+lh*7, cs,ch_ctrl, 0.5f,0.4f,0.9f);
+    // Row 9 — Home/End keys
+    pfontStr("HOME END",    cx2,cy2+lh*8,  cs,ch_ctrl, 0.5f,0.9f,1.f);
+    pfontStr("FAR LEFT RIGHT", cx2+0.210f,cy2+lh*8, cs,ch_ctrl, 0.3f,0.6f,0.8f);
+    // Row 10 — fullscreen
+    pfontStr("F11",         cx2,cy2+lh*9,  cs,ch_ctrl, 0.7f,0.7f,0.7f);
+    pfontStr("FULLSCREEN",  cx2+0.210f,cy2+lh*9, cs,ch_ctrl, 0.5f,0.5f,0.5f);
 
     // ── PRESS SPACE BUTTON ───────────────────────────────────
     float flash=0.5f+sinf(t*2.8f)*0.5f;
-    float pbx=0.28f, pby=0.710f, pbw=0.44f, pbh=0.090f;
+    float pbx=0.28f, pby=0.770f, pbw=0.44f, pbh=0.080f;
     // Glow
     hudRect(pbx-0.004f,pby-0.004f,pbw+0.008f,pbh+0.008f, 0.f,flash*0.7f,flash,flash*0.45f);
     // Body
@@ -1174,18 +1243,64 @@ static void handleInput(GLFWwindow* win, float dt)
         return;
     }
     float ms=12.f*dt;
+    // A / LEFT  → steer right (+X)
     if(glfwGetKey(win,GLFW_KEY_LEFT)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_A)==GLFW_PRESS)
         playerTargetX=std::min(playerTargetX+ms*5.f, ROAD_HALF-CAR_HW);
+    // D / RIGHT → steer left  (-X)
     if(glfwGetKey(win,GLFW_KEY_RIGHT)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_D)==GLFW_PRESS)
         playerTargetX=std::max(playerTargetX-ms*5.f,-ROAD_HALF+CAR_HW);
+    if(glfwGetKey(win,GLFW_KEY_HOME)==GLFW_PRESS)
+        playerTargetX=-ROAD_HALF+CAR_HW;
+    if(glfwGetKey(win,GLFW_KEY_END)==GLFW_PRESS)
+        playerTargetX=ROAD_HALF-CAR_HW;
 
+    // ── Forward accelerate  (W / UP arrow) ───────────────────
+    accelOn = (glfwGetKey(win,GLFW_KEY_W)==GLFW_PRESS ||
+               glfwGetKey(win,GLFW_KEY_UP)==GLFW_PRESS);
+
+    // ── Brake / slow down  (S / DOWN arrow) ──────────────────
+    brakeOn = (glfwGetKey(win,GLFW_KEY_S)==GLFW_PRESS ||
+               glfwGetKey(win,GLFW_KEY_DOWN)==GLFW_PRESS);
+
+    // ── Nitro  (Shift / N) ────────────────────────────────────
     static bool nk=false,sk=false;
     bool nkn=(glfwGetKey(win,GLFW_KEY_LEFT_SHIFT)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_N)==GLFW_PRESS);
     if(nkn&&nitroFuel>0.05f) nitroOn=true; else nitroOn=false;
     nk=nkn;
-    bool skn=(glfwGetKey(win,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_S)==GLFW_PRESS);
+
+    // ── Slow-mo toggle  (Ctrl / Z) ────────────────────────────
+    bool skn=(glfwGetKey(win,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_Z)==GLFW_PRESS);
     if(skn&&!sk){ slowOn=!slowOn; slowTimer=0.f; }
     sk=skn;
+
+    // ── Zoom In   (Q / =) ─────────────────────────────────────
+    static bool zin_prev=false, zout_prev=false;
+    bool zin =(glfwGetKey(win,GLFW_KEY_Q)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_EQUAL)==GLFW_PRESS);
+    bool zout=(glfwGetKey(win,GLFW_KEY_E)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_MINUS)==GLFW_PRESS);
+    if(zin  && !zin_prev)  camZoomTarget = std::max(camZoomTarget - 0.15f, 0.40f); // zoom in
+    if(zout && !zout_prev) camZoomTarget = std::min(camZoomTarget + 0.15f, 2.20f); // zoom out
+    zin_prev=zin; zout_prev=zout;
+    // Also support mouse scroll via continuous hold
+    if(glfwGetKey(win,GLFW_KEY_PAGE_UP)  ==GLFW_PRESS) camZoomTarget=std::max(camZoomTarget-0.5f*dt,0.40f);
+    if(glfwGetKey(win,GLFW_KEY_PAGE_DOWN)==GLFW_PRESS) camZoomTarget=std::min(camZoomTarget+0.5f*dt,2.20f);
+
+    // F11 — toggle fullscreen
+    static bool f11prev=false;
+    bool f11=(glfwGetKey(win,GLFW_KEY_F11)==GLFW_PRESS);
+    if(f11&&!f11prev){
+        gFullscreen=!gFullscreen;
+        if(gFullscreen){
+            // Save windowed geometry
+            glfwGetWindowPos(win,&gWinX,&gWinY);
+            glfwGetWindowSize(win,&gWinW,&gWinH);
+            GLFWmonitor* mon=glfwGetPrimaryMonitor();
+            const GLFWvidmode* vm=glfwGetVideoMode(mon);
+            glfwSetWindowMonitor(win,mon,0,0,vm->width,vm->height,vm->refreshRate);
+        } else {
+            glfwSetWindowMonitor(win,nullptr,gWinX,gWinY,gWinW,gWinH,0);
+        }
+    }
+    f11prev=f11;
 
     if(glfwGetKey(win,GLFW_KEY_ESCAPE)==GLFW_PRESS) glfwSetWindowShouldClose(win,1);
 }
@@ -1197,14 +1312,33 @@ static void updateGame(float dt)
 {
     if(gState!=GS_PLAYING) return;
     float ts = slowOn?0.35f:(nitroOn?1.65f:1.f);
-    float rdt=dt*ts;
 
     playerX+=(playerTargetX-playerX)*10.f*dt;
 
-    float eff=baseSpeed*ts;
-    distance+=eff*dt;
-    score=(int)(distance*2.f)+coinCount*50;
-    baseSpeed=std::min(10.f+distance*0.014f,32.f);
+    // ── Manual speed control ──────────────────────────────────
+    // Auto-speed baseline increases with distance
+    float autoSpeed = std::min(10.f + distance*0.014f, 32.f);
+
+    if(accelOn && !brakeOn){
+        // W/UP: accelerate beyond auto-speed, up to 45
+        baseSpeed = std::min(baseSpeed + 18.f*dt, 45.f);
+    } else if(brakeOn && !accelOn){
+        // S/DOWN: brake hard — can slow to near-stop (min 1.0)
+        baseSpeed = std::max(baseSpeed - 22.f*dt, 1.0f);
+    } else {
+        // No input: drift back toward auto-speed
+        if(baseSpeed < autoSpeed)
+            baseSpeed = std::min(baseSpeed + 8.f*dt, autoSpeed);
+        else
+            baseSpeed = std::max(baseSpeed - 4.f*dt, autoSpeed);
+    }
+
+    // ── Smooth zoom interpolation ─────────────────────────────
+    camZoom += (camZoomTarget - camZoom) * 6.f*dt;
+
+    float eff = baseSpeed * ts;
+    distance += eff*dt;
+    score = (int)(distance*2.f) + coinCount*50;
 
     if(nitroOn){ nitroFuel=std::max(nitroFuel-dt*0.22f,0.f); if(nitroFuel<=0.f)nitroOn=false; }
     else        nitroFuel=std::min(nitroFuel+dt*0.08f,1.f);
@@ -1261,20 +1395,25 @@ static void updateGame(float dt)
 // ─────────────────────────────────────────────────────────────
 static void render()
 {
-    float asp=(float)SCR_W/SCR_H;
+    // Always recalculate aspect from current framebuffer size
+    float asp = (SCR_H > 0) ? (float)SCR_W / (float)SCR_H : 16.f/9.f;
 
     // Camera
     float shake=shakeAmt;
     float camShX = shake*((rand()%100-50)/1000.f);
     float camShY = shake*((rand()%100-50)/2000.f);
 
-    // Camera directly behind player, centred on road, looking straight ahead
-    glm::vec3 camPos  = { playerX*0.25f + camShX,  5.0f + camShY,  -12.0f };
-    glm::vec3 camTarget = { 0.0f,                   0.5f,            80.0f  };
-    glm::vec3 up={0.f,1.f,0.f};
+    // Camera is ALWAYS at road centre (X=0), elevated and pulled back.
+    // Only the target X shifts slightly with player for steering feel.
+    // This guarantees the road is centred at every aspect ratio.
+    glm::vec3 camPos    = { camShX,              6.0f + camShY,  -16.0f };
+    glm::vec3 camTarget = { playerX * 0.15f,     0.0f,            80.0f  };
+    glm::vec3 up        = { 0.f, 1.f, 0.f };
 
-    glm::mat4 V = glm::lookAt(camPos,camTarget,up);
-    glm::mat4 P = glm::perspective(glm::radians(62.f+baseSpeed*0.3f), asp, 0.3f, 400.f);
+    // Vertical FOV — camZoom: <1 = zoom in (narrow FOV), >1 = zoom out (wide FOV)
+    float vfov = glm::radians((55.f + baseSpeed * 0.20f) * camZoom);
+    glm::mat4 V = glm::lookAt(camPos, camTarget, up);
+    glm::mat4 P = glm::perspective(vfov, asp, 0.3f, 400.f);
     gVP  = P * V;
     gCam = camPos;
 
@@ -1324,7 +1463,7 @@ static void render()
         // Player car at world Z=0 (camera is at Z=-12, so player is ahead)
         bool drawPlayer=!invincible||(int)(gTime*12)%2==0;
         if(drawPlayer)
-            drawCar(playerX, 2.0f, {0.20f,0.92f,0.10f},CAR_HW,CAR_HH,false,true);
+            drawCar(playerX, 4.0f, {0.20f,0.92f,0.10f},CAR_HW,CAR_HH,false,true);
     }
 
     // ── Bloom ──────────────────────────────────────────────────
@@ -1374,7 +1513,7 @@ static void render()
     if(gState==GS_MENU){
         drawMenu();
     } else if(gState==GS_PLAYING){
-        drawSpeedometer(baseSpeed*(nitroOn?1.65f:1.f), 35.f);
+        drawSpeedometer(baseSpeed*(nitroOn?1.65f:1.f), 45.f);
         drawNitroBar();
         drawLives();
         drawScorePanel();
@@ -1395,10 +1534,27 @@ static void render()
 // ─────────────────────────────────────────────────────────────
 //  Resize callback
 // ─────────────────────────────────────────────────────────────
+static void rebuildFBOs()
+{
+    // Delete old FBOs
+    glDeleteFramebuffers(1,&sceneFBO.fbo); glDeleteTextures(1,&sceneFBO.tex); glDeleteRenderbuffers(1,&sceneFBO.rbo);
+    glDeleteFramebuffers(1,&bloomA.fbo);   glDeleteTextures(1,&bloomA.tex);   glDeleteRenderbuffers(1,&bloomA.rbo);
+    glDeleteFramebuffers(1,&bloomB.fbo);   glDeleteTextures(1,&bloomB.tex);   glDeleteRenderbuffers(1,&bloomB.rbo);
+    sceneFBO = makeFBO(SCR_W, SCR_H);
+    bloomA   = makeFBO(SCR_W, SCR_H);
+    bloomB   = makeFBO(SCR_W, SCR_H);
+}
+
+static void onScroll(GLFWwindow*, double /*x*/, double y){
+    // Scroll up = zoom in (smaller FOV), scroll down = zoom out
+    camZoomTarget = std::clamp((float)(camZoomTarget - y*0.12f), 0.40f, 2.20f);
+}
+
 static void onResize(GLFWwindow*,int w,int h){
     if(w<1)w=1; if(h<1)h=1;
     SCR_W=w; SCR_H=h;
     glViewport(0,0,w,h);
+    rebuildFBOs();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1412,11 +1568,14 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
     glfwWindowHint(GLFW_OPENGL_PROFILE,GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES,4);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     GLFWwindow* win=glfwCreateWindow(SCR_W,SCR_H,"Highway Racer",nullptr,nullptr);
     if(!win){fprintf(stderr,"GLFW failed\n");return 1;}
+    gWin=win;
     glfwMakeContextCurrent(win);
     glfwSetFramebufferSizeCallback(win,onResize);
+    glfwSetScrollCallback(win, onScroll);
     glfwSwapInterval(1);
 
     if(!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)){

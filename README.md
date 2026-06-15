@@ -83,14 +83,23 @@ make -j$(sysctl -n hw.logicalcpu)
 
 ## Controls
 
-| Key       | Action                                             |
-| --------- | -------------------------------------------------- |
-| Left / A  | Steer left                                         |
-| Right / D | Steer right                                        |
-| Shift / N | Nitro boost (hold) - consumes fuel, auto-recharges |
-| Ctrl / S  | Slow-motion toggle (5 s max)                       |
-| Space     | Start game / restart from menu                     |
-| Escape    | Quit                                               |
+| Key             | Action                                             |
+| --------------- | -------------------------------------------------- |
+| A / ←           | Steer right                                        |
+| D / →           | Steer left                                         |
+| Home            | Steer instantly to the far-left lane               |
+| End             | Steer instantly to the far-right lane              |
+| W / ↑           | Accelerate / Move forward                          |
+| S / ↓           | Brake / Reverse                                    |
+| Shift / N       | Nitro boost (hold) - consumes fuel, auto-recharges |
+| Ctrl / Z        | Slow-motion toggle (5 s max)                       |
+| Q / =           | Zoom in (narrows field of view)                    |
+| E / -           | Zoom out (widens field of view)                    |
+| Mouse Scroll    | Smooth zoom in / out                               |
+| Page Up / Down  | Continuous gradual zoom in / out                   |
+| Space           | Start game / restart from menu                     |
+| F11             | Toggle fullscreen                                  |
+| Escape          | Quit                                               |
 
 ## Game Rules
 
